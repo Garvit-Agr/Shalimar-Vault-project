@@ -2,6 +2,11 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
+// --- NEW BIOMETRIC LIBRARIES ---
+#include <Wire.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+
 // Include our HTML files from the separate tabs
 #include "client_html.h"
 #include "login_html.h"
@@ -14,7 +19,11 @@
 #define ECHO_PIN 18
 #define LDR_PIN 32        // Digital LDR (1 = Dark, 0 = Light)
 #define LED_G_PIN 19      // Green LED (Gate Unlocked)
-#define LED_R_PIN 21      // Red LED (Gate Locked / Alarm)
+#define LED_R_PIN 26      // [CHANGED TO 26] Red LED (Gate Locked / Alarm)
+
+// --- I2C PINS FOR PULSE SENSOR ---
+#define SDA_PIN 21        // Connect to SL/SDA on sensor
+#define SCL_PIN 22        // Connect to SC/SCL on sensor
 
 // --- SETTINGS ---
 const char* WIFI_SSID = "Vault_Secure_Net";
@@ -22,12 +31,12 @@ const int DISTANCE_THRESHOLD = 15;
 const unsigned long SESSION_DURATION = 30000; // 30s Demo Time
 
 AsyncWebServer server(80);
+MAX30105 particleSensor; // The Biometric Sensor Object
 
 // --- STATE GLOBALS ---
 int occupancy = 0;
 bool isGateUnlocked = false;
 unsigned long unlockTimer = 0;
-
 int doorState = 0; 
 unsigned long doorTimeout = 0;
 bool prevIR1 = HIGH, prevIR2 = HIGH;
@@ -36,17 +45,32 @@ bool sessionActive = false;
 bool requestPending = false;
 bool gateBreach = false;
 bool vaultBreach = false;
-bool hardwareLockdown = false; 
-
+bool hardwareLockdown = false;
 unsigned long sessionTimer = 0;
 int currentDistance = 0, currentLight = 1;
 
+// --- BIOMETRIC GLOBALS ---
+int pulseBeatCount = 0;
+
 void setup() {
   Serial.begin(115200);
-  pinMode(IR_PIN_1, INPUT); pinMode(IR_PIN_2, INPUT);
+  pinMode(IR_PIN_1, INPUT);
+  pinMode(IR_PIN_2, INPUT);
   pinMode(TRIG_PIN, OUTPUT); pinMode(ECHO_PIN, INPUT);
   pinMode(LDR_PIN, INPUT_PULLUP);
   pinMode(LED_G_PIN, OUTPUT); pinMode(LED_R_PIN, OUTPUT);
+
+  // --- PULSE SENSOR SETUP ---
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    Serial.println("⚠️ MAX3010x Pulse Sensor NOT FOUND! Check wiring.");
+    // We don't use while(1) here so your vault web server still runs even if the sensor is unplugged!
+  } else {
+    Serial.println("✅ Biometric Pulse Sensor Online.");
+    particleSensor.setup(); 
+    particleSensor.setPulseAmplitudeRed(0x0A); 
+    particleSensor.setPulseAmplitudeGreen(0);  
+  }
 
   // --- ACCESS POINT SETUP ---
   Serial.println("\nStarting Vault Wi-Fi Network...");
@@ -121,18 +145,33 @@ void setup() {
 }
 
 void loop() {
-  // --- 1. SIMULATED BIOMETRICS (TEAM HEIST MODE) ---
-  if (Serial.available() > 0) {
-    char inChar = Serial.read();
-    if (inChar == 'A' || inChar == 'a') {
+  // --- 1. PHYSICAL BIOMETRIC LIVENESS SCANNER ---
+  if (!isGateUnlocked) {
+    long irValue = particleSensor.getIR(); // Read the sensor
+    
+    // Check if a heartbeat is actually detected in the finger
+    if (checkForBeat(irValue) == true) {
+      pulseBeatCount++;
+      Serial.print("💓 Pulse Detected! Verifying Liveness: ");
+      Serial.println(pulseBeatCount);
+    }
+
+    // Require 3 consecutive beats to prevent fake/accidental triggers
+    if (pulseBeatCount >= 3) {
       // Multiple entries allowed, but block if safe is open or alarms are ringing
       if (sessionActive || hardwareLockdown) {
         Serial.println("🛑 ACCESS DENIED: System is currently in LOCKDOWN or VAULT IN USE.");
       } else {
         isGateUnlocked = true; 
         unlockTimer = millis(); 
-        Serial.println("[GATE] TEAM ENTRY UNLOCKED. Please enter.");
+        Serial.println("[GATE] BIOMETRIC VERIFIED. TEAM ENTRY UNLOCKED.");
       }
+      pulseBeatCount = 0; // Reset counter
+    }
+
+    // Auto-Reset if the finger is removed before 3 beats are reached
+    if (irValue < 50000) {
+      pulseBeatCount = 0;
     }
   }
 
