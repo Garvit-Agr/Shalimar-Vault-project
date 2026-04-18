@@ -119,15 +119,15 @@ const char manager_html[] PROGMEM = R"rawliteral(
   <div class="section-title">Live Status</div>
   <div class="stats-row">
     <div class="stat-card green"><div class="stat-label">People Inside</div><div class="stat-value green" id="statPeople">0</div><div class="stat-sub">Vault occupancy</div></div>
-    <div class="stat-card amber"><div class="stat-label">Distance to Safe</div><div class="stat-value amber" id="statDist">-- cm</div><div class="stat-sub">Ultrasonic sensor</div></div>
+    <div class="stat-card amber"><div class="stat-label">Distance to Safe</div><div class="stat-value amber" id="statDist">-- cm</div><div class="stat-sub">Radar sweeping sensor</div></div>
     <div class="stat-card red"><div class="stat-label">Light Level (LDR)</div><div class="stat-value red" id="statLight">--</div><div class="stat-sub">Safe lid status</div></div>
-    <div class="stat-card blue"><div class="stat-label">Gate Status</div><div class="stat-value blue" id="statGate">LOCKED</div><div class="stat-sub">Entry control</div></div>
+    <div class="stat-card blue"><div class="stat-label">Entry Status</div><div class="stat-value blue" id="statGate">LOCKED</div><div class="stat-sub">Biometric access</div></div>
   </div>
 
   <div class="panel" style="margin-bottom: 24px;">
-    <div class="panel-title" style="margin-bottom: 0; border-bottom: none;">Live Room Tracker</div>
+    <div class="panel-title" style="margin-bottom: 0; border-bottom: none;">Radar Sweep Tracker</div>
     <div class="map-wrap">
-      <div class="map-label">GATE</div>
+      <div class="map-label">ENTRY</div>
       <div class="map-track">
         <div class="map-person" id="mapPerson"></div>
       </div>
@@ -140,10 +140,10 @@ const char manager_html[] PROGMEM = R"rawliteral(
     <div style="display:flex;flex-direction:column;gap:20px;">
       <div class="panel">
         <div class="panel-title">Sensor Readings</div>
-        <div class="sensor-row"><span class="sensor-name">ULTRASONIC — Distance</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-amber" id="barDist" style="width:0%"></div></div><span class="sensor-val amber" id="sensorDist">-- cm</span></div></div>
+        <div class="sensor-row"><span class="sensor-name">RADAR SWEEP — Distance</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-amber" id="barDist" style="width:0%"></div></div><span class="sensor-val amber" id="sensorDist">-- cm</span></div></div>
         <div class="sensor-row"><span class="sensor-name">LDR — Light Level</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-red" id="barLight" style="width:0%"></div></div><span class="sensor-val red" id="sensorLight">--</span></div></div>
         <div class="sensor-row"><span class="sensor-name">IR — Person Count</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-green" id="barPeople" style="width:0%"></div></div><span class="sensor-val green" id="sensorPeople">0</span></div></div>
-        <div class="sensor-row"><span class="sensor-name">GATE ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorGate" style="color:var(--vault-red)">ARMED</span></div></div>
+        <div class="sensor-row"><span class="sensor-name">ENTRY ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorGate" style="color:var(--vault-red)">ARMED</span></div></div>
         <div class="sensor-row"><span class="sensor-name">VAULT ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorVault" style="color:var(--vault-red)">ARMED</span></div></div>
       </div>
       <div class="session-box">
@@ -161,7 +161,7 @@ const char manager_html[] PROGMEM = R"rawliteral(
       <div class="panel">
         <div class="panel-title">Manual Controls</div>
         <div style="display:flex;flex-direction:column;gap:10px;">
-          <button class="btn-override" onclick="overrideGate()">🔓 EMERGENCY GATE RELEASE</button>
+          <button class="btn-override" onclick="overrideGate()">🔓 EMERGENCY ENTRY OVERRIDE</button>
           <button class="btn-deny" onclick="forceReset()" style="width:100%;border-color:rgba(90,98,114,0.4);color:var(--text-muted)">FORCE RESET SYSTEM</button>
         </div>
       </div>
@@ -200,14 +200,14 @@ const char manager_html[] PROGMEM = R"rawliteral(
   function resetRequest() { document.getElementById('requestCard').className = 'request-card'; document.getElementById('reqBadge').textContent = 'NO REQUEST'; document.getElementById('reqBadge').className = 'req-badge badge-none'; document.getElementById('reqInfo').textContent = 'Waiting for client to submit a request...'; document.getElementById('btnApprove').disabled = true; document.getElementById('btnDeny').disabled = true; }
   
   function forceReset() { if(confirm('Reset system?')) { endSession(); resetRequest(); fetch('/reset').catch(()=>{}); } }
-  function overrideGate() { if(confirm('Force gate open for 5 seconds?')) fetch('/override_gate').catch(()=>{}); }
+  function overrideGate() { if(confirm('Force entry LEDs open and bypass alarms for 5 seconds?')) fetch('/override_gate').catch(()=>{}); }
 
   let isModalOpen = false;
   function triggerAlarmModal(type) {
     if (isModalOpen) return; 
     isModalOpen = true;
     const overlay = document.getElementById('alarmModal'); const text = document.getElementById('alarmModalText');
-    if (type === "GATE") { text.innerHTML = "<strong>TAILGATING DETECTED:</strong><br><br>An unauthorized person has crossed the gate without a valid biometric scan."; } 
+    if (type === "GATE") { text.innerHTML = "<strong>TAILGATING DETECTED:</strong><br><br>An unauthorized person has crossed the entry line without a valid biometric scan."; } 
     else if (type === "VAULT") { text.innerHTML = "<strong>VAULT PROXIMITY ALERT:</strong><br><br>An unauthorized person is too close to the safe, or the safe box was forced open!"; }
     overlay.classList.add('active');
   }
@@ -228,7 +228,7 @@ const char manager_html[] PROGMEM = R"rawliteral(
         startSession();
     }
 
-    // FIX 3: Sync timer strictly with ESP32 payload
+    // Sync timer strictly with ESP32 payload
     if (data.sessionActive) {
       sessionRemaining = data.sessionSecs;
     }
@@ -268,7 +268,7 @@ const char manager_html[] PROGMEM = R"rawliteral(
     if (data.vaultBreach) { triggerAlarmModal("VAULT"); document.getElementById('sensorVault').textContent = "BREACHED!"; } 
     else { document.getElementById('sensorVault').textContent = sessionActive ? "DISARMED" : "ARMED"; }
 
-    // FIX 2: Modal auto-clear strictly tied to physical room occupancy
+    // Modal auto-clear strictly tied to physical room occupancy
     if (isModalOpen && data.people === 0) {
       document.getElementById('alarmModal').classList.remove('active'); 
       isModalOpen = false;

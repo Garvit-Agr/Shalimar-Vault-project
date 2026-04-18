@@ -21,7 +21,7 @@
 #define LED_R_PIN 26      
 #define SDA_PIN 21        
 #define SCL_PIN 22        
-#define GATE_SERVO_PIN 12 
+#define RADAR_SERVO_PIN 12  // NEW: Replaced Gate Servo with Radar Servo
 #define SAFE_SERVO_PIN 13 
 
 // --- SETTINGS ---
@@ -32,12 +32,12 @@ const unsigned long EGRESS_DURATION = 10000;
 
 AsyncWebServer server(80);
 MAX30105 particleSensor;
-Servo gateServo;
+Servo radarServo; // NEW: Radar motor
 Servo safeServo;
 
 // --- STATE GLOBALS ---
 int occupancy = 0;
-bool isGateUnlocked = false;
+bool isGateUnlocked = false; // Kept intact for LEDs and UI logic
 unsigned long unlockTimer = 0;
 int doorState = 0; 
 unsigned long doorTimeout = 0;
@@ -53,9 +53,13 @@ unsigned long sessionTimer = 0;
 int currentDistance = 0, currentLight = 1;
 int pulseBeatCount = 0;
 
+// --- RADAR GLOBALS ---
+int radarAngle = 45; // Start angle
+int sweepStep = 5;   // Degrees to move per tick
+
 // --- ARCHITECTURE GLOBALS ---
 String authorizedIP = "";      
-bool isEgressing = false;      
+bool isEgressing = false;
 unsigned long egressTimer = 0;
 bool gateOverride = false;     
 
@@ -69,11 +73,12 @@ void setup() {
   // --- SERVO SETUP ---
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
-  gateServo.setPeriodHertz(50);
+  radarServo.setPeriodHertz(50);
   safeServo.setPeriodHertz(50);
-  gateServo.attach(GATE_SERVO_PIN, 500, 2400);
+  
+  radarServo.attach(RADAR_SERVO_PIN, 500, 2400);
   safeServo.attach(SAFE_SERVO_PIN, 500, 2400);
-  gateServo.write(0); 
+  radarServo.write(radarAngle); 
   safeServo.write(0); 
 
   // --- PULSE SENSOR SETUP ---
@@ -112,7 +117,6 @@ void setup() {
 
   // --- API ENDPOINTS ---
   server.on("/request", HTTP_POST, [](AsyncWebServerRequest *req){
-    // ISSUE 4 SKIPPED: Occupancy check is NOT here so teams can enter together.
     if (sessionActive || requestPending) { req->send(403, "text/plain", "Occupied"); return; }
     if (hardwareLockdown) { req->send(403, "text/plain", "Locked"); return; }
     
@@ -159,7 +163,6 @@ void setup() {
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *req){
     bool isAuth = (req->client()->remoteIP().toString() == authorizedIP);
     
-    // FIX 3: Server-side Session Timer
     unsigned long sessionSecs = 0;
     if (sessionActive) {
       unsigned long elapsed = millis() - sessionTimer;
@@ -205,11 +208,12 @@ void loop() {
     isGateUnlocked = false; gateOverride = false;
   }
 
-  // --- 2. SERVO MOTORS ---
+  // --- 2. LEDS & SAFE SERVO (Gate Servo Removed) ---
+  // We keep the LED logic so users know when biometrics are accepted
   if ((isGateUnlocked && !hardwareLockdown) || gateOverride) {
-    gateServo.write(90); digitalWrite(LED_G_PIN, HIGH); digitalWrite(LED_R_PIN, LOW);
+    digitalWrite(LED_G_PIN, HIGH); digitalWrite(LED_R_PIN, LOW);
   } else {
-    gateServo.write(0); digitalWrite(LED_G_PIN, LOW); digitalWrite(LED_R_PIN, HIGH);
+    digitalWrite(LED_G_PIN, LOW); digitalWrite(LED_R_PIN, HIGH);
     isGateUnlocked = false; 
   }
 
@@ -226,7 +230,7 @@ void loop() {
     isEgressing = false; 
   }
 
-  // --- 4. IR LASER TRACKING (Jedi Auto-Exit Included) ---
+  // --- 4. IR LASER TRACKING ---
   bool currIR1 = digitalRead(IR_PIN_1), currIR2 = digitalRead(IR_PIN_2);
 
   if (doorState == 0) {
@@ -256,17 +260,27 @@ void loop() {
   }
   prevIR1 = currIR1; prevIR2 = currIR2;
 
-  // --- 5. VAULT SENSORS (FIX 5: Non-blocking millis) ---
+  // --- 5. VAULT SENSORS & RADAR SWEEP ---
   static unsigned long lastSensorRead = 0;
   if (currentMillis - lastSensorRead >= 100) {
     lastSensorRead = currentMillis;
     
+    // NEW: Sweep the radar by 5 degrees
+    radarAngle += sweepStep;
+    if (radarAngle >= 135 || radarAngle <= 45) { // 90-degree field of view
+      sweepStep = -sweepStep;
+    }
+    radarServo.write(radarAngle);
+
+    // Read the ultrasonic sensor at this exact angle
     digitalWrite(TRIG_PIN, LOW); delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH); delayMicroseconds(10); digitalWrite(TRIG_PIN, LOW);
     long duration = pulseIn(ECHO_PIN, HIGH, 25000); 
     currentDistance = (duration > 0) ? (duration * 0.0343) / 2.0 : 999;
+    
     currentLight = digitalRead(LDR_PIN); 
 
+    // Radar Alarm Check (Triggers if anything breaks 15cm at any sweeping angle)
     if (!sessionActive && !isEgressing) {
       if ((currentDistance > 0 && currentDistance < DISTANCE_THRESHOLD) || (currentLight == 0)) {
         if (!vaultBreach) { vaultBreach = true; hardwareLockdown = true; }
