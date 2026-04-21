@@ -1,4 +1,4 @@
-const char manager_html[] PROGMEM = R"rawliteral(
+const char* manager_html PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,10 +78,6 @@ const char manager_html[] PROGMEM = R"rawliteral(
   .btn-approve:hover { background: var(--vault-green-dim); } .btn-approve:disabled { opacity: 0.3; pointer-events: none; }
   .btn-deny { flex: 1; padding: 11px; background: transparent; color: var(--vault-red); border: 1px solid rgba(255,51,68,0.35); border-radius: 3px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; cursor: pointer; transition: background 0.2s; text-transform: uppercase; }
   .btn-deny:hover { background: rgba(255,51,68,0.08); } .btn-deny:disabled { opacity: 0.3; pointer-events: none; }
-  
-  .btn-override { padding: 11px; background: transparent; color: var(--vault-amber); border: 1px solid rgba(255,170,0,0.35); border-radius: 3px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; cursor: pointer; transition: background 0.2s; text-transform: uppercase; width: 100%; margin-bottom: 10px;}
-  .btn-override:hover { background: rgba(255,170,0,0.08); }
-
   .session-box { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 20px; animation: fadeUp 0.5s 0.2s ease both; }
   .timer-display { font-family: var(--mono); font-size: 42px; color: var(--vault-amber); text-align: center; margin: 16px 0; letter-spacing: 0.04em; }
   .timer-display.inactive { color: var(--text-muted); font-size: 28px; }
@@ -98,6 +94,22 @@ const char manager_html[] PROGMEM = R"rawliteral(
   .modal-card p { font-size: 16px; color: var(--text); line-height: 1.5; margin-bottom: 30px; }
   .btn-modal { padding: 16px 30px; background: var(--vault-red); color: white; border: none; border-radius: 4px; font-family: var(--mono); font-size: 16px; font-weight: bold; cursor: pointer; letter-spacing: 0.1em; text-transform: uppercase; }
   .btn-modal:hover { background: #ff1a2e; box-shadow: 0 0 15px rgba(255,51,68,0.5); }
+
+  /* --- ADDED: MOBILE RESPONSIVE DESIGN --- */
+  @media (max-width: 900px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 600px) {
+    .stats-row { grid-template-columns: 1fr; }
+    .page { padding: 16px; }
+    nav { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .nav-right { width: 100%; justify-content: space-between; }
+    .req-actions { flex-direction: column; }
+    .sensor-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .sensor-right { width: 100%; justify-content: space-between; }
+    .stat-value { font-size: 24px; }
+  }
 </style>
 </head>
 <body>
@@ -119,15 +131,15 @@ const char manager_html[] PROGMEM = R"rawliteral(
   <div class="section-title">Live Status</div>
   <div class="stats-row">
     <div class="stat-card green"><div class="stat-label">People Inside</div><div class="stat-value green" id="statPeople">0</div><div class="stat-sub">Vault occupancy</div></div>
-    <div class="stat-card amber"><div class="stat-label">Distance to Safe</div><div class="stat-value amber" id="statDist">-- cm</div><div class="stat-sub">Radar sweeping sensor</div></div>
+    <div class="stat-card amber"><div class="stat-label">Distance to Safe</div><div class="stat-value amber" id="statDist">-- cm</div><div class="stat-sub">Ultrasonic sensor</div></div>
     <div class="stat-card red"><div class="stat-label">Light Level (LDR)</div><div class="stat-value red" id="statLight">--</div><div class="stat-sub">Safe lid status</div></div>
-    <div class="stat-card blue"><div class="stat-label">Entry Status</div><div class="stat-value blue" id="statGate">LOCKED</div><div class="stat-sub">Biometric access</div></div>
+    <div class="stat-card blue"><div class="stat-label">Gate Status</div><div class="stat-value blue" id="statGate">LOCKED</div><div class="stat-sub">Entry control</div></div>
   </div>
 
   <div class="panel" style="margin-bottom: 24px;">
-    <div class="panel-title" style="margin-bottom: 0; border-bottom: none;">Radar Sweep Tracker</div>
+    <div class="panel-title" style="margin-bottom: 0; border-bottom: none;">Live Room Tracker</div>
     <div class="map-wrap">
-      <div class="map-label">ENTRY</div>
+      <div class="map-label">GATE</div>
       <div class="map-track">
         <div class="map-person" id="mapPerson"></div>
       </div>
@@ -140,10 +152,10 @@ const char manager_html[] PROGMEM = R"rawliteral(
     <div style="display:flex;flex-direction:column;gap:20px;">
       <div class="panel">
         <div class="panel-title">Sensor Readings</div>
-        <div class="sensor-row"><span class="sensor-name">RADAR SWEEP — Distance</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-amber" id="barDist" style="width:0%"></div></div><span class="sensor-val amber" id="sensorDist">-- cm</span></div></div>
+        <div class="sensor-row"><span class="sensor-name">ULTRASONIC — Distance</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-amber" id="barDist" style="width:0%"></div></div><span class="sensor-val amber" id="sensorDist">-- cm</span></div></div>
         <div class="sensor-row"><span class="sensor-name">LDR — Light Level</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-red" id="barLight" style="width:0%"></div></div><span class="sensor-val red" id="sensorLight">--</span></div></div>
         <div class="sensor-row"><span class="sensor-name">IR — Person Count</span><div class="sensor-right"><div class="sensor-bar-wrap"><div class="sensor-bar bar-green" id="barPeople" style="width:0%"></div></div><span class="sensor-val green" id="sensorPeople">0</span></div></div>
-        <div class="sensor-row"><span class="sensor-name">ENTRY ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorGate" style="color:var(--vault-red)">ARMED</span></div></div>
+        <div class="sensor-row"><span class="sensor-name">GATE ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorGate" style="color:var(--vault-red)">ARMED</span></div></div>
         <div class="sensor-row"><span class="sensor-name">VAULT ALARM</span><div class="sensor-right"><span class="sensor-val" id="sensorVault" style="color:var(--vault-red)">ARMED</span></div></div>
       </div>
       <div class="session-box">
@@ -161,7 +173,6 @@ const char manager_html[] PROGMEM = R"rawliteral(
       <div class="panel">
         <div class="panel-title">Manual Controls</div>
         <div style="display:flex;flex-direction:column;gap:10px;">
-          <button class="btn-override" onclick="overrideGate()">🔓 EMERGENCY ENTRY OVERRIDE</button>
           <button class="btn-deny" onclick="forceReset()" style="width:100%;border-color:rgba(90,98,114,0.4);color:var(--text-muted)">FORCE RESET SYSTEM</button>
         </div>
       </div>
@@ -174,40 +185,47 @@ const char manager_html[] PROGMEM = R"rawliteral(
   function tick() { document.getElementById('clock').textContent = new Date().toTimeString().slice(0,8); }
   tick(); setInterval(tick, 1000);
 
-  const SESSION_DURATION = 30; 
-  let sessionRemaining = 0; let sessionActive = false; let sessionInterval = null;
+  let sessionActive = false;
+  let pendingRequest = false;
   const MAX_ROOM_LENGTH = 100; 
 
-  function startSession() { sessionActive = true; sessionInterval = setInterval(tickSession, 1000); updateUI(); }
-  function tickSession() {
-    if(sessionRemaining > 0) sessionRemaining--;
-    const m = Math.floor(sessionRemaining/60).toString().padStart(2,'0'), s = (sessionRemaining%60).toString().padStart(2,'0');
-    document.getElementById('timerDisplay').textContent = m + ':' + s; document.getElementById('timerDisplay').className = 'timer-display';
-    document.getElementById('timerBar').style.width = (sessionRemaining/SESSION_DURATION*100) + '%';
-    if (sessionRemaining <= 0) endSession();
-  }
-  function endSession() { clearInterval(sessionInterval); sessionActive = false; sessionRemaining = 0; document.getElementById('timerDisplay').textContent = 'NO SESSION'; document.getElementById('timerDisplay').className = 'timer-display inactive'; document.getElementById('timerBar').style.width = '0%'; updateUI(); }
-
-  let pendingRequest = false;
   function setPendingRequest(from) {
     pendingRequest = true; document.getElementById('requestCard').className = 'request-card pending';
     document.getElementById('reqBadge').textContent = 'PENDING'; document.getElementById('reqBadge').className = 'req-badge badge-pending';
     document.getElementById('reqInfo').innerHTML = 'Request from <span>' + from + '</span>';
     document.getElementById('btnApprove').disabled = false; document.getElementById('btnDeny').disabled = false;
   }
-  function approveAccess() { pendingRequest = false; resetRequest(); fetch('/approve').catch(()=>{}); startSession(); }
+  
+  // --- FIXED: Instant UI Feedback for Approve ---
+  function approveAccess() { 
+      pendingRequest = false; 
+      resetRequest(); 
+      fetch('/approve').catch(()=>{}); 
+      
+      // Update UI instantly so the user doesn't feel lag waiting for the ESP32
+      sessionActive = true;
+      updateUI();
+      document.getElementById('timerDisplay').textContent = '00:30';
+      document.getElementById('timerDisplay').className = 'timer-display';
+      document.getElementById('timerBar').style.width = '100%';
+  }
+  
   function denyAccess() { pendingRequest = false; resetRequest(); fetch('/deny').catch(()=>{}); }
   function resetRequest() { document.getElementById('requestCard').className = 'request-card'; document.getElementById('reqBadge').textContent = 'NO REQUEST'; document.getElementById('reqBadge').className = 'req-badge badge-none'; document.getElementById('reqInfo').textContent = 'Waiting for client to submit a request...'; document.getElementById('btnApprove').disabled = true; document.getElementById('btnDeny').disabled = true; }
   
-  function forceReset() { if(confirm('Reset system?')) { endSession(); resetRequest(); fetch('/reset').catch(()=>{}); } }
-  function overrideGate() { if(confirm('Force entry LEDs open and bypass alarms for 5 seconds?')) fetch('/override_gate').catch(()=>{}); }
+  function forceReset() { 
+      if(confirm('Reset system?')) { 
+          resetRequest(); 
+          fetch('/reset').catch(()=>{}); 
+      } 
+  }
 
   let isModalOpen = false;
   function triggerAlarmModal(type) {
     if (isModalOpen) return; 
     isModalOpen = true;
     const overlay = document.getElementById('alarmModal'); const text = document.getElementById('alarmModalText');
-    if (type === "GATE") { text.innerHTML = "<strong>TAILGATING DETECTED:</strong><br><br>An unauthorized person has crossed the entry line without a valid biometric scan."; } 
+    if (type === "GATE") { text.innerHTML = "<strong>TAILGATING DETECTED:</strong><br><br>An unauthorized person has crossed the gate without a valid biometric scan."; } 
     else if (type === "VAULT") { text.innerHTML = "<strong>VAULT PROXIMITY ALERT:</strong><br><br>An unauthorized person is too close to the safe, or the safe box was forced open!"; }
     overlay.classList.add('active');
   }
@@ -221,22 +239,30 @@ const char manager_html[] PROGMEM = R"rawliteral(
   }
 
   function updateSensors(data) {
-    if (!data.sessionActive && sessionActive) {
-      endSession(); 
-      addLog('Session ended remotely (early exit/timeout).', 'info');
-    } else if (data.sessionActive && !sessionActive) {
-        startSession();
-    }
-
-    // Sync timer strictly with ESP32 payload
     if (data.sessionActive) {
-      sessionRemaining = data.sessionSecs;
+        if (!sessionActive) {
+            sessionActive = true;
+            updateUI();
+        }
+        const sec = data.sessionSecs.toString().padStart(2, '0');
+        document.getElementById('timerDisplay').textContent = '00:' + sec;
+        document.getElementById('timerDisplay').className = 'timer-display';
+        document.getElementById('timerBar').style.width = (data.sessionSecs / 30 * 100) + '%';
+    } else {
+        if (sessionActive) {
+            sessionActive = false;
+            updateUI();
+            addLog('Session ended or auto-cleared.', 'info');
+        }
+        document.getElementById('timerDisplay').textContent = 'NO SESSION';
+        document.getElementById('timerDisplay').className = 'timer-display inactive';
+        document.getElementById('timerBar').style.width = '0%';
     }
 
     document.getElementById('statDist').textContent = data.distance + ' cm'; document.getElementById('sensorDist').textContent = data.distance + ' cm';
     document.getElementById('statLight').textContent = data.light; document.getElementById('sensorLight').textContent = data.light;
     document.getElementById('statPeople').textContent = data.people; document.getElementById('sensorPeople').textContent = data.people;
-    if (data.requestPending && !pendingRequest && !sessionActive) setPendingRequest('Authorized IP');
+    if (data.requestPending && !pendingRequest && !sessionActive) setPendingRequest('Client device');
 
     const personDot = document.getElementById('mapPerson');
     const mapStatus = document.getElementById('mapStatusText');
@@ -247,13 +273,13 @@ const char manager_html[] PROGMEM = R"rawliteral(
       if (pct > 100) pct = 100; 
       personDot.style.right = pct + '%';
       
-      if (data.lockdown) {
+      if (data.lockdown || data.systemBreach) {
         personDot.className = 'map-person breach';
         mapStatus.textContent = "INTRUDER TRACKED AT " + data.distance + " cm";
         mapStatus.style.color = "var(--vault-red)";
       } else {
         personDot.className = 'map-person';
-        mapStatus.textContent = "Authorized occupant at " + data.distance + " cm from safe.";
+        mapStatus.textContent = "Authorized user at " + data.distance + " cm from safe.";
         mapStatus.style.color = "var(--vault-amber)";
       }
     } else {
@@ -268,11 +294,9 @@ const char manager_html[] PROGMEM = R"rawliteral(
     if (data.vaultBreach) { triggerAlarmModal("VAULT"); document.getElementById('sensorVault').textContent = "BREACHED!"; } 
     else { document.getElementById('sensorVault').textContent = sessionActive ? "DISARMED" : "ARMED"; }
 
-    // Modal auto-clear strictly tied to physical room occupancy
-    if (isModalOpen && data.people === 0) {
-      document.getElementById('alarmModal').classList.remove('active'); 
-      isModalOpen = false;
-      addLog('Room empty. Alarm cleared.', 'ok');
+    if (!data.systemBreach && !data.lockdown && isModalOpen) {
+      document.getElementById('alarmModal').classList.remove('active'); isModalOpen = false;
+      addLog('System secure. Alarms auto-cleared.', 'ok');
     }
 
     if (data.lockdown) {
@@ -293,8 +317,9 @@ const char manager_html[] PROGMEM = R"rawliteral(
     if (sessionActive) { pill.className = 'status-pill session'; pill.innerHTML = '<div class="dot"></div><span>SESSION ACTIVE</span>'; } 
     else { pill.className = 'status-pill secure'; pill.innerHTML = '<div class="dot"></div><span>SECURE</span>'; }
   }
+  
   function pollESP32() { fetch('/status').then(r => r.json()).then(data => updateSensors(data)).catch(() => {}); }
-  setInterval(pollESP32, 2000);
+  setInterval(pollESP32, 1000);
 </script>
 </body>
 </html>

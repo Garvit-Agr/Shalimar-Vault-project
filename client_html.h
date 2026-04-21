@@ -18,6 +18,13 @@ const char* client_html PROGMEM = R"rawliteral(
   .btn-outline { background: transparent; border: 1px solid #2a2f38; color: #5a6272; }
   input { width: 100%; background: #1a1e24; border: 1px solid #2a2f38; padding: 12px; color: #fff; margin-bottom: 10px; font-family: var(--mono); outline: none; }
   .timer { font-size: 48px; color: var(--v-green); font-family: var(--mono); margin: 20px 0; }
+
+  /* --- ADDED: MOBILE RESPONSIVE DESIGN --- */
+  @media (max-width: 400px) {
+    body { padding: 10px; }
+    .card { padding: 24px 16px; }
+    .timer { font-size: 40px; }
+  }
 </style>
 </head>
 <body>
@@ -49,6 +56,12 @@ const char* client_html PROGMEM = R"rawliteral(
     <button class="btn" style="background:var(--v-red); color:#fff;" onclick="secureVault()">SECURE VAULT NOW</button>
   </div>
 
+  <div class="screen" id="sEgress">
+    <h2 style="color:var(--v-amber)">EXIT VAULT</h2>
+    <p style="color:#5a6272; font-size:14px; margin-bottom: 10px;">Safe locked. Walk through the gate now.</p>
+    <div class="timer" id="egressTimer" style="color:var(--v-amber);">10</div>
+  </div>
+
   <div class="screen" id="sBreach">
     <h2 style="color:var(--v-red)">LOCKDOWN</h2>
     <p>Unauthorized access detected.</p>
@@ -77,15 +90,18 @@ const char* client_html PROGMEM = R"rawliteral(
   }
 
   function secureVault() {
-    fetch('/end_session').then(() => {
-      sActive = false;
-      showS('sStatus');
-    });
+    if(confirm("Initiate exit sequence? You will have 10 seconds to cross the threshold.")) {
+      fetch('/end_session', { method: 'POST' }).then(r => {
+        if(r.ok) {
+          sActive = false;
+          showS('sEgress');
+        }
+      });
+    }
   }
 
   function poll() {
     fetch('/status').then(r=>r.json()).then(d=>{
-      
       if(d.lockdown || d.gateBreach || d.vaultBreach) {
           if(!isBreached) { isBreached = true; showS('sBreach'); }
           return; 
@@ -95,14 +111,18 @@ const char* client_html PROGMEM = R"rawliteral(
           isBreached = false; showS('sStatus'); 
       }
 
+      if(d.isEgressing) {
+          showS('sEgress');
+          document.getElementById('egressTimer').textContent = d.egressSecs;
+          if (sActive) sActive = false;
+          return;
+      } else if (document.getElementById('sEgress').classList.contains('active')) {
+          showS('sStatus'); 
+      }
+
       if(d.sessionActive) {
-          if(d.isAuthorizedUser) {
-              if(!sActive) { sActive = true; showS('sGrant'); startT(); }
-              // FIX 3: Keep client timer synced perfectly with ESP32
-              document.getElementById('timer').textContent = "00:" + d.sessionSecs.toString().padStart(2,'0');
-          } else {
-              if(sActive) { sActive = false; }
-          }
+          if(!sActive) { sActive = true; showS('sGrant'); }
+          document.getElementById('timer').textContent = "00:" + d.sessionSecs.toString().padStart(2,'0');
       } else {
           if(sActive) { sActive = false; showS('sStatus'); }
       }
@@ -116,7 +136,6 @@ const char* client_html PROGMEM = R"rawliteral(
       document.getElementById('vAlm').textContent = (d.systemBreach || d.lockdown) ? "BREACHED" : "SECURE";
       
       const btn = document.getElementById('reqBtn');
-      
       if(d.sessionActive && !isGranted) { 
           btn.textContent = "VAULT IN USE"; 
           btn.disabled = true; btn.style.opacity = "0.5";
@@ -136,22 +155,7 @@ const char* client_html PROGMEM = R"rawliteral(
     }).catch(err => console.error("Poll error:", err));
   }
 
-  function startT() {
-    let rem = 30;
-    const itv = setInterval(()=>{
-      rem--;
-      if (rem < 0) rem = 0;
-      if(rem <= 0 || !sActive) {
-          clearInterval(itv);
-          sActive = false;
-          if(document.getElementById('sGrant').classList.contains('active')) {
-            showS('sStatus');
-          }
-      }
-    }, 1000);
-  }
-
-  setInterval(poll, 2000);
+  setInterval(poll, 1000);
 </script>
 </body>
 </html>
