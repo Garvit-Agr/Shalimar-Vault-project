@@ -2,8 +2,10 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ESP32Servo.h>
-#include <Wire.h>          // ADDED: For I2C
-#include "MAX30105.h"      // ADDED: Pulse Sensor Library
+#include <Wire.h>          
+#include "MAX30105.h"      
+#include <ElegantOTA.h>    // FEATURE: Local Web OTA
+#include "mbedtls/md.h"    // FEATURE: SHA256 Cryptographic Hashing
 
 // Include our HTML files from the separate tabs
 #include "client_html.h"
@@ -15,13 +17,13 @@
 #define IR_PIN_2 27  
 #define TRIG_PIN 5
 #define ECHO_PIN 18
-#define LDR_PIN 32  // Digital LDR (1 = Dark, 0 = Light)
+#define LDR_PIN 32  
 #define RADAR_SERVO_PIN 12      
 #define SAFE_SERVO_PIN 13 
-#define LED_G_PIN 19 // ADDED: Gate Green LED
-#define LED_R_PIN 26 // ADDED: Gate Red LED
-#define SDA_PIN 21   // ADDED: Pulse Sensor SDA
-#define SCL_PIN 22   // ADDED: Pulse Sensor SCL
+#define LED_G_PIN 19 
+#define LED_R_PIN 26 
+#define SDA_PIN 21   
+#define SCL_PIN 22   
 
 // --- SETTINGS ---
 const char* WIFI_SSID = "Vault_Secure_Net";
@@ -29,10 +31,16 @@ const int DISTANCE_THRESHOLD = 15;
 const unsigned long SESSION_DURATION = 30000; // 30s Demo Time
 const unsigned long EGRESS_DURATION = 10000;  // 10s exit timer
 
+// --- PRE-COMPUTED SHA256 HASHES ---
+// "vault123" = 83e580e0fb9d08e5e04ccbd2b21c4b79b5025cd0c8db4da65b82bfdf3a67732e
+// "open123"  = 64da8a211755ee694939a3f2b7a421b8b8c56e3bd6bb5c68b7d41fbd6d38e210
+String MANAGER_HASH = "";
+String CLIENT_HASH  = "";
+
 AsyncWebServer server(80);
 Servo radarServo; 
 Servo safeServo; 
-MAX30105 particleSensor; // ADDED: Pulse Sensor Object
+MAX30105 particleSensor; 
 
 // --- RADAR SWEEP VARIABLES ---
 int minAngle = 45;
@@ -41,28 +49,52 @@ int radarAngle = minAngle;
 int sweepStep = 5;
 unsigned long lastSweepTime = 0;
 
-// --- STATE GLOBALS ---
-int occupancy = 0;
-bool isGateUnlocked = false;
-unsigned long unlockTimer = 0;
-int doorState = 0; 
-unsigned long doorTimeout = 0;
-bool prevIR1 = HIGH, prevIR2 = HIGH;
+// --- STATE GLOBALS (FIXED: Marked 'volatile' for Dual-Core Safety) ---
+volatile int occupancy = 0;
+volatile bool isGateUnlocked = false;
+volatile unsigned long unlockTimer = 0;
+volatile int doorState = 0; 
+volatile unsigned long doorTimeout = 0;
+volatile bool prevIR1 = HIGH, prevIR2 = HIGH;  // <-- PUT THIS LINE BACK IN!
 
-bool sessionActive = false;
-bool requestPending = false;
-bool gateBreach = false;
-bool vaultBreach = false;
-bool hardwareLockdown = false;
-unsigned long sessionTimer = 0;
+volatile bool sessionActive = false;
+volatile bool requestPending = false;
+volatile bool gateBreach = false;
+volatile bool vaultBreach = false;
+volatile bool hardwareLockdown = false;
+volatile unsigned long sessionTimer = 0; 
 int currentDistance = 0, currentLight = 1; 
 
 // Egress Variables
-bool isEgressing = false;
-unsigned long egressTimer = 0;
+volatile bool isEgressing = false;
+volatile unsigned long egressTimer = 0;
+
+// --- FEATURE: SHA256 Hashing Function ---
+String getSHA256(String payload) {
+  byte shaResult[32];
+  mbedtls_md_context_t ctx;
+  mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+  mbedtls_md_starts(&ctx);
+  mbedtls_md_update(&ctx, (const unsigned char *) payload.c_str(), payload.length());
+  mbedtls_md_finish(&ctx, shaResult);
+  mbedtls_md_free(&ctx);
+
+  String hashStr = "";
+  for(int i= 0; i< 32; i++) {
+    char str[3];
+    sprintf(str, "%02x", (int)shaResult[i]);
+    hashStr += str;
+  }
+  return hashStr;
+}
 
 void setup() {
   Serial.begin(115200);
+  MANAGER_HASH = getSHA256("vault123");
+  CLIENT_HASH = getSHA256("open123");
   pinMode(IR_PIN_1, INPUT); pinMode(IR_PIN_2, INPUT);
   pinMode(TRIG_PIN, OUTPUT); pinMode(ECHO_PIN, INPUT);
   pinMode(LDR_PIN, INPUT_PULLUP);
@@ -84,40 +116,63 @@ void setup() {
   digitalWrite(LED_G_PIN, LOW);
   digitalWrite(LED_R_PIN, HIGH);
 
-  // Initialize Pulse Sensor
+  // Optimized Pulse Sensor Parameters
   Wire.begin(SDA_PIN, SCL_PIN);
   if (!particleSensor.begin(Wire, I2C_SPEED_STANDARD)) {
-    Serial.println("⚠️ Pulse Sensor NOT FOUND! Check wiring.");
+    Serial.println("[AUDIT ERROR] Pulse Sensor NOT FOUND! Check wiring.");
   } else {
-    particleSensor.setup(); 
-    particleSensor.setPulseAmplitudeRed(0x0A); // Low power to just detect finger presence
-    particleSensor.setPulseAmplitudeGreen(0);  // Turn off green LED
+    particleSensor.setup(60, 4, 2, 100, 411, 4096);
+    particleSensor.setPulseAmplitudeRed(0x3F); 
+    particleSensor.setPulseAmplitudeGreen(0);
   }
 
-  // --- ACCESS POINT SETUP ---
-  Serial.println("\nStarting Vault Wi-Fi Network...");
+  // --- FEATURE: WPA2 Network Security ---
+  Serial.println("\n[AUDIT INFO] Starting Vault Wi-Fi Network (WPA2 Encryption Enabled)...");
   IPAddress local_ip(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(local_ip, gateway, subnet);
-  WiFi.softAP(WIFI_SSID, NULL);
+  
+  // WPA2 Password implemented (Counters Mirai open-network threat)
+  WiFi.softAP(WIFI_SSID, "VaultSecure2026!");
 
-  Serial.println("\n--- VAULT SYSTEM ONLINE ---");
-  Serial.print("1. Connect your phone to Wi-Fi: ");
-  Serial.println(WIFI_SSID);
-  Serial.println("2. Open your Kodular App or go to: http://192.168.4.1");
-  Serial.println("--------------------------------------------------");
+  Serial.println("\n==================================================");
+  Serial.println("[AUDIT INFO] VAULT SYSTEM ONLINE & SECURED");
+  Serial.print("1. Connect to Wi-Fi: "); Serial.println(WIFI_SSID);
+  Serial.println("   Password: VaultSecure2026!");
+  Serial.println("2. User Dashboard: http://192.168.4.1");
+  Serial.println("3. OTA Updates: http://192.168.4.1/update");
+  Serial.println("==================================================\n");
   
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){ req->send_P(200, "text/html", client_html); });
   server.on("/client", HTTP_GET, [](AsyncWebServerRequest *req){ req->send_P(200, "text/html", client_html); });
   server.on("/login", HTTP_GET, [](AsyncWebServerRequest *req){ req->send_P(200, "text/html", login_html); });
   server.on("/manager", HTTP_GET, [](AsyncWebServerRequest *req){ req->send_P(200, "text/html", manager_html); });
+  
+  // --- FEATURE: Brute Force Lockout & SHA256 Verification ---
+  static int failedLoginAttempts = 0;
+
   server.on("/auth", HTTP_POST, [](AsyncWebServerRequest *req){
     String u = "", p = "";
     if(req->hasParam("user", true)) u = req->getParam("user", true)->value();
     if(req->hasParam("pass", true)) p = req->getParam("pass", true)->value();
-    if(u == "admin" && p == "vault123"){ req->send(200, "application/json", "{\"ok\":true}"); } 
-    else { req->send(200, "application/json", "{\"ok\":false}"); }
+    
+    // Hash password and compare securely
+    if(u == "admin" && getSHA256(p) == MANAGER_HASH){ 
+      failedLoginAttempts = 0; // Reset on success
+      Serial.println("[AUDIT INFO] Manager authentication SUCCESS.");
+      req->send(200, "application/json", "{\"ok\":true}"); 
+    } 
+    else { 
+      failedLoginAttempts++;
+      Serial.printf("[AUDIT WARN] Failed login attempt %d/3 from IP: %s\n", failedLoginAttempts, req->client()->remoteIP().toString().c_str());
+      
+      if(failedLoginAttempts >= 3) {
+         hardwareLockdown = true;
+         Serial.println("[SECURITY ALERT] BRUTE FORCE DETECTED. SYSTEM IN LOCKDOWN.");
+      }
+      req->send(200, "application/json", "{\"ok\":false}"); 
+    }
   });
 
   server.on("/request", HTTP_POST, [](AsyncWebServerRequest *req){
@@ -125,38 +180,53 @@ void setup() {
     if (requestPending) { req->send(403, "text/plain", "Pending"); return; }
     if (hardwareLockdown) { req->send(403, "text/plain", "Locked"); return; }
     
-    if(req->hasParam("pass", true) && req->getParam("pass", true)->value() == "open123"){
-      requestPending = true; req->send(200, "text/plain", "OK");
-    } else { req->send(403, "text/plain", "Denied"); }
+    // Hash password and compare securely
+    if(req->hasParam("pass", true) && getSHA256(req->getParam("pass", true)->value()) == CLIENT_HASH){
+      requestPending = true; 
+      Serial.println("[AUDIT INFO] Client access request submitted.");
+      req->send(200, "text/plain", "OK");
+    } else { 
+      Serial.println("[AUDIT WARN] Client provided invalid access PIN.");
+      req->send(403, "text/plain", "Denied"); 
+    }
   });
 
   server.on("/approve", HTTP_GET, [](AsyncWebServerRequest *req){
     if (hardwareLockdown) { req->send(403, "text/plain", "DENIED: LOCKDOWN"); return; }
-    sessionActive = true; requestPending = false; sessionTimer = millis(); 
+    
+    sessionTimer = millis(); 
     isEgressing = false; 
+    requestPending = false; 
+    sessionActive = true; 
+    Serial.println("[AUDIT INFO] Manager APPROVED vault access.");
     req->send(200, "text/plain", "Approved");
   });
 
-  server.on("/deny", HTTP_GET, [](AsyncWebServerRequest *req){ requestPending = false; req->send(200, "text/plain", "Denied"); });
+  server.on("/deny", HTTP_GET, [](AsyncWebServerRequest *req){ 
+    requestPending = false; 
+    Serial.println("[AUDIT INFO] Manager DENIED vault access.");
+    req->send(200, "text/plain", "Denied"); 
+  });
 
   server.on("/end_session", HTTP_POST, [](AsyncWebServerRequest *req){
     if (sessionActive) {
       sessionActive = false; 
       isEgressing = true; 
       egressTimer = millis(); 
+      Serial.println("[AUDIT INFO] Client initiated SECURE VAULT sequence. Egress started.");
       req->send(200, "text/plain", "Safe Secured");
     } else { req->send(403, "text/plain", "Unauthorized"); }
   });
 
   server.on("/reset", HTTP_GET, [](AsyncWebServerRequest *req){
     sessionActive = false; requestPending = false; isEgressing = false;
-    gateBreach = false; vaultBreach = false; 
+    gateBreach = false; vaultBreach = false; failedLoginAttempts = 0;
     if (occupancy == 0) hardwareLockdown = false; 
+    Serial.println("[AUDIT INFO] System MASTER RESET triggered by manager.");
     req->send(200, "text/plain", "Reset");
   });
 
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *req){
-    // FIX: Properly calculate sessionSecs so the UI timer doesn't say "NaN"
     unsigned long sessionSecs = 0;
     if (sessionActive) sessionSecs = (millis() - sessionTimer) < SESSION_DURATION ? (SESSION_DURATION - (millis() - sessionTimer)) / 1000 : 0;
     
@@ -169,7 +239,7 @@ void setup() {
     json += "\"people\":" + String(occupancy) + ",";
     json += "\"gateOpen\":" + String(isGateUnlocked ? "true" : "false") + ",";
     json += "\"sessionActive\":" + String(sessionActive ? "true" : "false") + ",";
-    json += "\"sessionSecs\":" + String(sessionSecs) + ","; // FIXED: Now sending backend timer
+    json += "\"sessionSecs\":" + String(sessionSecs) + ","; 
     json += "\"requestPending\":" + String(requestPending ? "true" : "false") + ",";
     json += "\"gateBreach\":" + String(gateBreach ? "true" : "false") + ",";
     json += "\"vaultBreach\":" + String(vaultBreach ? "true" : "false") + ",";
@@ -181,11 +251,17 @@ void setup() {
     req->send(200, "application/json", json);
   });
 
+  // FEATURE: OTA Updates
+  ElegantOTA.begin(&server);
+
   server.begin();
 }
 
 void loop() {
   unsigned long currentMillis = millis();
+
+  // Handle OTA Process
+  ElegantOTA.loop();
 
   // --- BIOMETRIC SENSOR (FINGER PRESENCE DETECTION) ---
   static unsigned long fingerDetectTime = 0;
@@ -197,20 +273,19 @@ void loop() {
     if (!isFingerOnSensor) {
       isFingerOnSensor = true;
       fingerDetectTime = currentMillis;
-      Serial.println("⏳ Scanning Biometric... Please hold finger.");
+      Serial.println("[AUDIT INFO] ⏳ Scanning Biometric... Please hold finger.");
     } 
-    // After holding for 2.5 seconds continuously
     else if (currentMillis - fingerDetectTime > 2500) { 
       if (hardwareLockdown) {
-        Serial.println("🛑 DENIED: SYSTEM IN LOCKDOWN");
+        Serial.println("[SECURITY ALERT] 🛑 BIOMETRIC DENIED: SYSTEM IN LOCKDOWN");
         fingerDetectTime = currentMillis + 5000; 
       } else if (sessionActive) { 
-        Serial.println("🛑 DENIED: Vault Session Active");
+        Serial.println("[SECURITY ALERT] 🛑 BIOMETRIC DENIED: Vault Session Active");
         fingerDetectTime = currentMillis + 5000; 
       } else if (!isGateUnlocked && doorState == 0) { 
         isGateUnlocked = true;
         unlockTimer = currentMillis; 
-        Serial.println("✅ [GATE] Unlocked via Biometric Scanner.");
+        Serial.println("[AUDIT INFO] ✅ [GATE] Unlocked via Biometric Scanner.");
         fingerDetectTime = currentMillis + 5000; 
       }
     }
@@ -223,20 +298,19 @@ void loop() {
     char incoming = Serial.read();
     if (incoming == 'A' || incoming == 'a') { 
       if (hardwareLockdown) {
-        Serial.println("🛑 DENIED: SYSTEM IN LOCKDOWN");
+        Serial.println("[SECURITY ALERT] 🛑 KEYBOARD DENIED: SYSTEM IN LOCKDOWN");
       }
       else if (sessionActive) { 
-        Serial.println("🛑 DENIED: Vault Session Active");
+        Serial.println("[SECURITY ALERT] 🛑 KEYBOARD DENIED: Vault Session Active");
       }
       else { 
         isGateUnlocked = true;
         unlockTimer = currentMillis; 
-        Serial.println("[GATE] Unlocked via Keyboard.");
+        Serial.println("[AUDIT INFO] ✅ [GATE] Unlocked via Keyboard Override.");
       }
     }
   }
   
-  // Changed to 10000 for 10 second unlock
   if (isGateUnlocked && (currentMillis - unlockTimer > 10000)) isGateUnlocked = false;
 
   // LED LOGIC based on isGateUnlocked state
@@ -249,16 +323,17 @@ void loop() {
   }
 
   // Transition logic for sessions ending naturally vs early exit
-  if (sessionActive && (currentMillis - sessionTimer > SESSION_DURATION)) {
+ if (sessionActive && (millis() - sessionTimer > SESSION_DURATION)) {
     sessionActive = false;
     isEgressing = true;
-    egressTimer = currentMillis;
+    egressTimer = millis();
+    Serial.println("[AUDIT INFO] Session time expired. Auto-securing safe.");
   }
-  if (isEgressing && (currentMillis - egressTimer > EGRESS_DURATION)) {
+  if (isEgressing && (millis() - egressTimer > EGRESS_DURATION)) {
     isEgressing = false;
   }
 
-  // 2. IR Gate Tracking
+  // --- FEATURE: Input Validation & Physical Access Logic ---
   bool currIR1 = digitalRead(IR_PIN_1), currIR2 = digitalRead(IR_PIN_2);
   
   if (doorState == 0) {
@@ -275,9 +350,9 @@ void loop() {
       if (!isGateUnlocked) { 
         gateBreach = true; 
         hardwareLockdown = true; 
-        Serial.println("🚨 TAILGATING DETECTED!");
+        Serial.println("[SECURITY ALERT] 🚨 TAILGATING DETECTED! Perimeter breached.");
       } else { 
-        Serial.println("[GATE] Authorized Entry."); 
+        Serial.println("[AUDIT INFO] [GATE] Authorized Entry."); 
       }
       isGateUnlocked = false;
       doorState = 0;
@@ -286,14 +361,14 @@ void loop() {
     if (currIR1 == LOW && prevIR1 == HIGH) { 
       if (occupancy > 0) occupancy--;
       doorState = 0; 
-      Serial.println("[GATE] Person Exited.");
+      Serial.println("[AUDIT INFO] [GATE] Person Exited.");
       if (occupancy == 0) { 
         gateBreach = false;
         vaultBreach = false; 
         sessionActive = false; 
         isEgressing = false; 
         hardwareLockdown = false; 
-        Serial.println("[SYSTEM] Room is empty. Alarms AUTO-CLEARED.");
+        Serial.println("[AUDIT INFO] [SYSTEM] Room is empty. Alarms AUTO-CLEARED.");
       }
     } else if (currentMillis - doorTimeout > 2000) doorState = 0; 
   }
@@ -301,10 +376,18 @@ void loop() {
   prevIR2 = currIR2;
 
   // --- SAFE SERVO LOGIC ---
-  if (sessionActive && !hardwareLockdown && !gateBreach && !vaultBreach) {
+  static bool isSafeCurrentlyOpen = false;
+  bool shouldSafeBeOpen = (sessionActive && !hardwareLockdown && !gateBreach && !vaultBreach);
+
+  if (shouldSafeBeOpen && !isSafeCurrentlyOpen) {
     safeServo.write(90);
-  } else {
+    isSafeCurrentlyOpen = true;
+    Serial.println("[AUDIT INFO] 🔓 SAFE UNLOCKED: Servo moved to 90");
+  } 
+  else if (!shouldSafeBeOpen && isSafeCurrentlyOpen) {
     safeServo.write(0);
+    isSafeCurrentlyOpen = false;
+    Serial.println("[AUDIT INFO] 🔒 SAFE LOCKED: Servo moved to 0");
   }
 
   // 3. Vault Sensor Tracking & Radar Sweep
@@ -336,11 +419,10 @@ void loop() {
       if (!vaultBreach) { 
         vaultBreach = true;
         hardwareLockdown = true; 
-        Serial.println("🚨 VAULT BREACH DETECTED!"); 
+        Serial.println("[SECURITY ALERT] 🚨 VAULT BREACH DETECTED! Proximity/Light sensor tripped."); 
       }
     }
   } else {
     vaultBreach = false;
   }
-  delay(50); 
 }
